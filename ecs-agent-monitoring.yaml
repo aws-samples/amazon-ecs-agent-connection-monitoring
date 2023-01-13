@@ -1,0 +1,437 @@
+#
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
+
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  This template creates the required resources for implementing an ECS monitoring solution. Please check the solution overview on this blog post: https://aws.amazon.com/blogs/containers/
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterLabels:
+      EnableMonitoring:
+        default: >
+          Do you want to enable the monitoring solution?
+      MonitorAllECSClusters:
+        default: >
+          Do you want to monitor all ECS Clusters within the region?
+      MonitoringTagKeyValue:
+        default: >
+          Tag Value
+      EnableEncryption:
+        default: >
+          Do you want to enable encryption for SQS and SNS?
+      KMSAdminRole:
+        default: >
+          ARN for the KMS Key administrator.
+      NotificationEmail:
+        default: >
+          Destination email for receiving notifications.
+    ParameterGroups:
+      -
+        Label:
+          default: "Monitoring configuration"
+        Parameters:
+          - EnableMonitoring
+          - MonitorAllECSClusters
+          - MonitoringTagKeyValue
+          - NotificationEmail
+      -
+        Label:
+          default: "Advanced settings"
+        Parameters:
+          - EnableEncryption
+          - KMSAdminRole
+
+Parameters:
+  EnableMonitoring:
+    Type: String
+    Default: Yes
+    Description: >
+      Select 'true' if you want to enable the monitoring engine. Select 'false' if you want to stop the monitoring.
+    AllowedValues:
+      - Yes
+      - No
+  MonitorAllECSClusters:
+    Type: String
+    Default: Yes
+    Description: >
+      If you select 'true', all the ECS Clusters within the region will be monitored.
+      If you select 'false', clusters you want to monitor must be tagged with Tag Name: 'ecs-agent-monitoring' and a custom Tag Value you must supply below. This allow you to deploy multiple instances of the solution
+      for monitoring different Clusters and workloads.
+    AllowedValues:
+      - Yes
+      - No
+  MonitoringTagKeyValue:
+    Type: String
+    Default: ecs-monitoring-group-1
+    Description: >
+      If you prefer to monitor only tagged clusters, you must provide the Tag Value present in your ECS Clusters. The Tag Key is fixed to be 'ecs-agent-monitoring'.
+      If you select 'true' in the option above, this value will be ignored and all the ECS Clusters within the region will be monitored.
+    AllowedPattern: ^([\p{L}\p{Z}\p{N}_.:/=+\-@]*)$
+    MinLength: 1
+    MaxLength: 256
+  EnableEncryption:
+    Type: String
+    Default: No
+    Description: >
+      Encryption at rest for the events sent to the SQS Queue and the SNS topic. If you enable it, you must provide a KMS admin role.
+      Please note that encryption at rest for CloudWatch logs is always enabled via server-side encryption for the log data at rest. Enabling this will use your custom KMS key for CloudWatch logs as well.
+    AllowedValues:
+      - Yes
+      - No
+  KMSAdminRole:
+    Type: String
+    Default: ''
+    Description: >
+      (Required, if encryption is enabled) Admin user, group or role that will have full access to the CMK Encryption Key.
+    AllowedPattern: ^$|^arn:(aws|aws-cn|aws-us-gov):iam::\d{12}:(role|user|group)/[a-zA-Z_0-9+=,.@-_/]{1,}$
+  NotificationEmail:
+    Type: String
+    Description: >
+      Email address or distribution list to notify.
+    AllowedPattern: ^[a-zA-Z0-9]{1,}@[a-zA-Z0-9]{1,}\.[a-zA-Z]{1,}$
+
+Mappings:
+  LambdaSettingsMap:
+    LambdaRuntime:
+      value: python3.9
+    LambdaTimeout:
+      value: 300
+  MonitoringConfig:
+    expiredTTLseconds:
+      value: 60
+    logRetentionDays:
+      value: 60
+    MonitoringTagKeyName:
+      value: ecs-agent-monitoring
+
+Conditions:
+  EnableEventRule: !Equals [!Ref EnableMonitoring, 'true']
+  EncryptionCondition: !Equals [!Ref EnableEncryption, 'true']
+  MonitorAllECSClustersRegardlessTags: !Equals [!Ref MonitorAllECSClusters, 'true']
+
+Rules:
+  checkIAMRoleForKMS:
+    RuleCondition: !Equals
+      - !Ref EnableEncryption
+      - 'true'
+    Assertions:
+      - Assert: !Not
+          - 'Fn::Equals':
+              - ''
+              - !Ref KMSAdminRole
+        AssertDescription: Please specify a valid KMS administrator role, this property cannot be empty.
+
+Resources:
+  ECSEventBridgeECSAgentMonitorFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Custom resource deployed on VPCs owned by the Lambda service.
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}
+      Role: !GetAtt ECSEventBridgeMonitorECSAgentExecutionRole.Arn
+      CodeUri: code
+      Handler: lambda_event_bridge_monitor.handler
+      ReservedConcurrentExecutions: 1
+      Runtime: !FindInMap
+        - LambdaSettingsMap
+        - LambdaRuntime
+        - value
+      Timeout: !FindInMap
+        - LambdaSettingsMap
+        - LambdaTimeout
+        - value
+      Environment:
+        Variables:
+          monitoringTagKeyName: !If
+            - MonitorAllECSClustersRegardlessTags
+            - !Ref 'AWS::NoValue'
+            - !FindInMap
+                - MonitoringConfig
+                - MonitoringTagKeyName
+                - value
+          monitoringTagKeyValue: !If
+            - MonitorAllECSClustersRegardlessTags
+            - !Ref 'AWS::NoValue'
+            - !Ref MonitoringTagKeyValue
+          checkAllClusters: !If
+            - MonitorAllECSClustersRegardlessTags
+            - True
+            - False
+          sendEmailNotification: !Ref SNSMonitoringTopic
+  ECSEventBridgeMonitorECSAgentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ECSEventBridgeECSAgentMonitorFunction}
+      RetentionInDays: !FindInMap
+        - MonitoringConfig
+        - logRetentionDays
+        - value
+      KmsKeyId: !If
+        - EncryptionCondition
+        - !GetAtt KMSCMKKey.Arn
+        - !Ref AWS::NoValue
+  AgentFailureMetricFilterCluster:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ECSEventBridgeMonitorECSAgentLogGroup
+      FilterPattern: '[loglvl = WARNING, timestamp, id, cluster, node]'
+      MetricTransformations:
+        -
+          MetricValue: '1'
+          Dimensions:
+            - Key: ClusterName
+              Value: $cluster
+          MetricNamespace: ECS/ECSAgentFailures
+          MetricName: ECSAgentFailuresCount
+          Unit: Count
+  AgentFailureMetricFilterNode:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ECSEventBridgeMonitorECSAgentLogGroup
+      FilterPattern: '[loglvl = WARNING, timestamp, id, cluster, node]'
+      MetricTransformations:
+        -
+          MetricValue: '1'
+          Dimensions:
+            - Key: NodeName
+              Value: $node
+          MetricNamespace: ECS/ECSAgentFailures
+          MetricName: ECSAgentFailuresCount
+          Unit: Count
+  ECSEventBridgeMonitorECSAgentExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "Resource undetermined"
+    Properties:
+     AssumeRolePolicyDocument:
+       Statement:
+       - Action:
+         - sts:AssumeRole
+         Effect: Allow
+         Principal:
+           Service:
+           - lambda.amazonaws.com
+       Version: '2012-10-17'
+     Path: "/"
+     Policies:
+     - PolicyName: !Sub ${AWS::StackName}-CW
+       PolicyDocument:
+         Statement:
+         - Action:
+           - logs:CreateLogGroup
+           - logs:CreateLogStream
+           - logs:PutLogEvents
+           Effect: Allow
+           Resource: arn:aws:logs:*:*:*
+         Version: '2012-10-17'
+     - PolicyName: !Sub ${AWS::StackName}-SNS
+       PolicyDocument:
+         Statement:
+         - Action:
+            - sns:Publish
+           Effect: 'Allow'
+           Resource: !Ref SNSMonitoringTopic
+         Version: '2012-10-17'
+     - PolicyName: !Sub ${AWS::StackName}-Checks
+       PolicyDocument:
+         Statement:
+         - Action:
+            - ec2:DescribeInstances
+            - ecs:DescribeClusters
+            - ecs:DescribeContainerInstances
+           Effect: Allow
+           Resource: '*'
+         Version: '2012-10-17'
+     - !If
+        - EncryptionCondition
+        - PolicyName: !Sub ${AWS::StackName}-KMS
+          PolicyDocument:
+            Statement:
+            - Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt
+                - kms:GenerateDataKey
+                - kms:Describe
+              Effect: Allow
+              Resource: !GetAtt KMSCMKKey.Arn
+        - !Ref AWS::NoValue
+     - PolicyName: !Sub ${AWS::StackName}-SQS
+       PolicyDocument:
+         Statement:
+         - Action:
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+           Effect: Allow
+           Resource: !GetAtt ECSEventBridgeSQSQueue.Arn
+     - PolicyName: !Sub ${AWS::StackName}-SSM
+       PolicyDocument:
+         Statement:
+         - Action:
+            - ssm:DescribeInstanceInformation
+           Effect: Allow
+           Resource: '*'
+         Version: '2012-10-17'
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Triggered when Amazon ECS Agent is disconnected
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - ECS Container Instance State Change
+        detail:
+          agentConnected:
+            - false
+          status:
+            - ACTIVE
+      State: !If
+        - EnableEventRule
+        - ENABLED
+        - DISABLED
+      Targets:
+        - Arn: !GetAtt ECSEventBridgeSQSQueue.Arn
+          Id: ECSAgentDisconnected
+          RetryPolicy:
+            MaximumRetryAttempts: 4
+            MaximumEventAgeInSeconds: 60
+  ECSEventBridgeSQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      DelaySeconds: !FindInMap
+          - MonitoringConfig
+          - expiredTTLseconds
+          - value
+      VisibilityTimeout: !FindInMap
+        - LambdaSettingsMap
+        - LambdaTimeout
+        - value
+      MessageRetentionPeriod: 172800
+      KmsMasterKeyId: !If
+        - EncryptionCondition
+        - !Ref KMSCMKKey
+        - !Ref AWS::NoValue
+      KmsDataKeyReusePeriodSeconds: !If
+        - EncryptionCondition
+        - 43200
+        - !Ref AWS::NoValue
+  KMSCMKKey:
+    Type: AWS::KMS::Key
+    Condition: EncryptionCondition
+    Properties:
+      Description: CMK for encrypting SQS, SNS and CloudWatch data
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: Allow EventBridge access
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: '*'
+          - Sid: Allow SNS access
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: '*'
+          - Sid: Allow CloudWatch access
+            Effect: Allow
+            Principal:
+              Service: !Sub logs.${AWS::Region}.amazonaws.com
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt
+              - kms:GenerateDataKey
+              - kms:DescribeKey
+            Resource: '*'
+            Condition:
+                ArnEquals:
+                  kms:EncryptionContext:aws:logs:arn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}
+          - Sid: Allow access for Key Administrators
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+                - !Ref KMSAdminRole
+            Action:
+              - kms:*
+            Resource: '*'
+  SQSPermissions:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action:
+            - sqs:SendMessage
+          Resource: !GetAtt ECSEventBridgeSQSQueue.Arn
+          Condition:
+            ArnEquals:
+              aws:SourceArn: !GetAtt EventRule.Arn
+      Queues:
+        - !Ref ECSEventBridgeSQSQueue
+  LambdaFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 20
+      MaximumBatchingWindowInSeconds: 20
+      Enabled: true
+      EventSourceArn: !GetAtt ECSEventBridgeSQSQueue.Arn
+      FunctionName: !GetAtt ECSEventBridgeECSAgentMonitorFunction.Arn
+  SNSMonitoringTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+      TopicName: !Sub ${AWS::StackName}-ECSAgentMonitoringTopic
+      KmsMasterKeyId: !If
+        - EncryptionCondition
+        - !Ref KMSCMKKey
+        - !Ref AWS::NoValue
+
+Outputs:
+  CWLogsInsightsDocs:
+    Description: Link to Log Insights Analysis in CloudWatch
+    Value: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CWL_QuerySyntax.html
+  CWLogsLink:
+    Description: Link to the solution logs in CloudWatch
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#logsV2:log-groups/log-group/$252Faws$252Flambda$252F${ECSEventBridgeECSAgentMonitorFunction}
+  CWMetricsLink:
+    Description: Link to the solution CloudWatch metrics
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~(view~'timeSeries~stacked~false~region~'eu-west-1);namespace=~'ECS*2fECSAgentFailures

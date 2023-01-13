@@ -1,0 +1,47 @@
+###
+# Misc
+#
+**/*.zip
+**/*.localtest
+**/*.bkp
+/testing
+/Output/*
+
+# Standard files
+**/.vscode
+**/.DS_Store
+**/.ropeproject
+
+# Ignore packaged templates
+**/packaged-*
+
+###
+# Python files
+#
+**/__pycache__
+**/*.pyc
+**/.env
+**/.venv
+**/env/
+**/venv/
+**/ENV/
+**/env.bak/
+**/venv.bak/
+**/.Python
+**/build/
+**/develop-eggs/
+**/dist/
+**/downloads/
+**/eggs/
+**/.eggs/
+**/lib/
+**/lib64/
+**/parts/
+**/sdist/
+**/var/
+**/wheels/
+**/share/python-wheels/
+**/*.egg-info/
+**/.installed.cfg
+**/*.egg
+.pre-commit-config.yaml

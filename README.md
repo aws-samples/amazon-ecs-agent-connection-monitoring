@@ -1,6 +1,6 @@
 # ECS Agent Monitoring
 
-Amazon Elastic Container Service (Amazon ECS) (https://aws.amazon.com/ecs/) is a fully managed container orchestration service that allows organizations to deploy, manage and scale containerized workloads. It is deeply integrated with the AWS ecosystem in order to provide a secure and easy-to-use solution for managing applications not only in the cloud but now also on your infrastructure with Amazon ECS Anywhere (https://aws.amazon.com/ecs/anywhere/).
+Amazon Elastic Container Service [Amazon ECS](https://aws.amazon.com/ecs/) is a fully managed container orchestration service that allows organizations to deploy, manage and scale containerized workloads. It is deeply integrated with the AWS ecosystem in order to provide a secure and easy-to-use solution for managing applications not only in the cloud but now also on your infrastructure with [Amazon ECS Anywhere](https://aws.amazon.com/ecs/anywhere/).
 
 Within Amazon ECS components, the ECS Agent is a vital piece which is in charge of all the communication between the ECS Container Instances and the ECS control plane logic. Among other tasks, the ECS Agent will register your ECS Container Instance within the ECS Cluster, receive instructions from the ECS Scheduler for placing, starting and stopping tasks, and also reporting Tasks and container status changes.
 

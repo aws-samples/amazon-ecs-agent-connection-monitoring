@@ -56,7 +56,7 @@ cd amazon-ecs-agent-connection-monitoring
 
 - Package ...
 ```
-aws --region=$the_region cloudformation package --template-file ./data-plane/data-plane.yaml --s3-bucket $the_bucket --output-template-file packaged-ecs-agent-monitoring.yaml
+aws --region=$the_region cloudformation package --template-file ./ecs-agent-monitoring.yaml --s3-bucket $the_bucket --output-template-file packaged-ecs-agent-monitoring.yaml
 ```
 
 - Deploy ...
